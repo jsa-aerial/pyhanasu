@@ -217,9 +217,9 @@ def hello(websocket):
 ##
 ## loop2 = asyncio.new_event_loop()
 ## asyncio.set_event_loop(loop2)
-## ws = asyncio.get_event_loop().run_until_complete(connect('ws://localhost:8765/ws'))
-## asyncio.get_event_loop().run_until_complete(hello(ws))
-## asyncio.get_event_loop().run_until_complete(close(ws))
+## ws = loop2.run_until_complete(connect('ws://localhost:8765/ws'))
+## loop2.run_until_complete(hello(ws))
+## loop2.run_until_complete(close(ws))
 
 ## s = 'key2.key21.key211'
 ## print get_db(cli_db,s.split('.'))

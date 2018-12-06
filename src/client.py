@@ -37,6 +37,7 @@ def ext_hook(code, data):
 ## Envelope keys
 op = keyword("op")
 set = keyword("set")
+reset = keyword("reset")
 payload = keyword("payload")
 msgrcv = keyword("msgrcv")
 msgsnt = keyword("msgsnt")
@@ -83,9 +84,9 @@ def update_db (x, keys, val):
 #    if
 
 
-def make_chans (isz, osz):
-    update_db(cli_db, ["ic"], gc.Chan(size=isz))
-    update_db(cli_db, ["oc"], gc.Chan(size=osz))
+def make_chans (icnm, isz, ocnm, osz):
+    update_db(cli_db, [icnm], gc.Chan(size=isz))
+    update_db(cli_db, [ocnm], gc.Chan(size=osz))
 
 def goloop (ic,oc):
     fin = False
@@ -96,18 +97,49 @@ def goloop (ic,oc):
             fin = True
         else:
             gc.go(oc.send, res)
-    print("GOLOOP exit")\
+    print("GOLOOP exit")
 
-def gofn():
-    ic = get_db(cli_db, ["ic"])
-    oc = get_db(cli_db, ["oc"])
+def gofn(icnm, ocnm):
+    ic = get_db(cli_db, [icnm])
+    oc = get_db(cli_db, [ocnm])
     goloop(ic=ic,oc=oc)
     print("gofn exit ...")
 
-def gorun ():
-    make_chans(19, 19)
-    gc.loop.run_in_executor(None, gofn)
+def gorun (inchan_name, otchan_name):
+    make_chans(inchan_name, 19, otchan_name, 19)
+    gc.loop.run_in_executor(None, gofn, inchan_name, otchan_name)
 
+
+
+
+def receive (ws, msg):
+    if op in msg:
+        mop = msg[op]
+    else:
+        mop = msg["op"]
+    if mop == set:
+        mbpsize = msg[payload][bpsize]
+        mmsgrcv = msg[payload][msgrcv]
+        update_db(cli_db, [ws, msgrcv], mmsgrcv)
+        update_db(cli_db, [ws, bpsize], mbpsize)
+    elif mop == reset:
+        update_db(cli_db, [ws, msgsnt], msg[payload][msgsnt])
+        go(get_db(cli_db, [ws, "chan"]).send, {op: bpresume, payload: msg})
+    elif mop == "msg" or mop == msg:
+        rcvd = get_db(cli_db, [ws, msgrcv])
+        if payload in msg:
+            data = msg[payload]
+        else:
+            data = msg["payload"]
+        if rcvd+1 >= get_db(cli_db, [ws, bpsize]):
+            update_db(cli_db, [ws, msgrcv], 0)
+            send(ws, "binary", {op: reset, payload: {msgsnt: 0}})
+        else:
+            update_db(cli_db, [ws, msgrcv], get_db(cli_db, [ws, msgrcv])+1)
+        go(get_db(cli_db, [ws, "chan"]).send,
+           {op: msg, payload: {"ws": ws, "data": data}})
+    else:
+        print("Client Receive Handler - unknown OP ", msg)
 
 
 
@@ -128,6 +160,30 @@ def connect(url):
 def close(websocket):
     yield from websocket.close()
 
+
+### Loop for running line reads/writes
+loop2 = asyncio.new_event_loop()
+
+def line_goloop (ic,oc):
+    fin = False
+    while (not fin):
+        f = gc.go(ic.recv)
+        res = f.result()
+        if res == done:
+            fin = True
+        else:
+            gc.go(oc.send, res)
+    print("Line GOLOOP exit")
+
+def line_gofn(icnm, ocnm):
+    ic = get_db(cli_db, [icnm])
+    oc = get_db(cli_db, [ocnm])
+    goloop(ic=ic,oc=oc)
+    print("gofn exit ...")
+
+def line_gorun (inchan_name, otchan_name):
+    make_chans(inchan_name, 19, otchan_name, 19)
+    gc.loop.run_in_executor(None, gofn, inchan_name, otchan_name)
 
 
 

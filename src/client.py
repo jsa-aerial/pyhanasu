@@ -150,17 +150,20 @@ def hello(websocket):
 
 
 ## from client import rmv,cli_db,get_db,update_db,connect,close,hello,gorun
-## ws = asyncio.get_event_loop().run_until_complete(connect('ws://localhost:8765/ws'))
-## asyncio.get_event_loop().run_until_complete(hello(ws))
-## asyncio.get_event_loop().run_until_complete(close(ws))
-
+##
+## gorun()
 ## go(ic.send,"Hi")
 ## f = go(oc.recv)
 ## f.result() => "Hi"
 ## go(ic.send,client.done)
 ## GOLOOP exit
 ## gofn exit ...
-
+##
+## loop2 = asyncio.new_event_loop()
+## asyncio.set_event_loop(loop2)
+## ws = asyncio.get_event_loop().run_until_complete(connect('ws://localhost:8765/ws'))
+## asyncio.get_event_loop().run_until_complete(hello(ws))
+## asyncio.get_event_loop().run_until_complete(close(ws))
 
 ## s = 'key2.key21.key211'
 ## print get_db(cli_db,s.split('.'))

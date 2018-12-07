@@ -113,6 +113,7 @@ def gorun (inchan_name, otchan_name):
 
 
 def receive (ws, msg):
+    kwmsg = keyword("msg")
     if op in msg:
         mop = msg[op]
     else:
@@ -125,7 +126,7 @@ def receive (ws, msg):
     elif mop == reset:
         update_db(cli_db, [ws, msgsnt], msg[payload][msgsnt])
         go(get_db(cli_db, [ws, "chan"]).send, {op: bpresume, payload: msg})
-    elif mop == "msg" or mop == msg:
+    elif mop == "msg" or mop == kwmsg:
         rcvd = get_db(cli_db, [ws, msgrcv])
         if payload in msg:
             data = msg[payload]
@@ -137,7 +138,7 @@ def receive (ws, msg):
         else:
             update_db(cli_db, [ws, msgrcv], get_db(cli_db, [ws, msgrcv])+1)
         go(get_db(cli_db, [ws, "chan"]).send,
-           {op: msg, payload: {"ws": ws, "data": data}})
+           {op: kwmsg, payload: {"ws": ws, "data": data}})
     else:
         print("Client Receive Handler - unknown OP ", msg)
 

@@ -119,9 +119,9 @@ def send (ws, enc, msg):
 
 def send_msg (ws, msg, encode="binary"):
     kwmsg = keyword("msg")
-    msntcnt = get_db(cli_db, [ws msgsnt])
-    ch = get_db(cli_db, [ws "chan"])
-    if msntcnt >= get_db(cli_db, [ws bpsize]):
+    msntcnt = get_db(cli_db, [ws, msgsnt])
+    ch = get_db(cli_db, [ws, "chan"])
+    if msntcnt >= get_db(cli_db, [ws, bpsize]):
         go(ch.send,
            {op: bpwait,
             payload: {"ws": ws, kwmsg: msg, "encode": encode,
@@ -129,7 +129,7 @@ def send_msg (ws, msg, encode="binary"):
     else:
         hmsg = {op: kwmsg, payload: msg}
         send(ws, encode, hmsg)
-        update_db(cli_db, [ws msgsnt], msntcnt+1)
+        update_db(cli_db, [ws, msgsnt], msntcnt+1)
         go(ch.send, {op: sent,
                      payload: {"ws": ws, kwmsg: hmsg,
                                msgsnt: get_db(cli_db, [ws, msgsnt])}})
@@ -177,7 +177,7 @@ def line_goloop (ws):
     while (not fin):
         try:
             msg = yield from ws.recv()
-            msg = msgpack.unpackb(initmsg, ext_hook=ext_hook, raw=False)
+            msg = msgpack.unpackb(msg, ext_hook=ext_hook, raw=False)
             if op in msg:
                 mop = msg[op]
             else:
@@ -198,10 +198,10 @@ def line_gorun (ws):
 
 def open (client_rec):
     ws = client_rec["ws"]
-    line_gorun(ws)
+    return line_gorun(ws)
 
 def rmtclose (ws, e):
-    ch = get_db(cli_db, [ws "chan"])
+    ch = get_db(cli_db, [ws, "chan"])
     print("Close: {0}".format(e))
     go(ch.send, {op: close, payload: {"code": e.code, "reason": e.reason}})
 
@@ -213,7 +213,7 @@ def onerror (ws, e):
 
 # 'ws://localhost:8765/ws'
 @asyncio.coroutine
-def open_connection (url):
+def connect (url):
     ws = yield from websockets.connect(url)
     client_chan =  gc.Chan(size=19)
     client_rec = {"url": url, "ws": ws, "chan": client_chan,
@@ -221,10 +221,12 @@ def open_connection (url):
     open(client_rec)
     update_db(cli_db, [client_chan], client_rec)
     update_db(cli_db, [ws], client_rec)
-    print("INIT MSG: ", initmsg)
     update_db(cli_db, [ws, "chan"], client_chan)
     gc.go(client_chan.send, {op: open, payload: ws})
     return client_chan
+
+def open_connection (url):
+    return loop2.run_until_complete(connect(url))
 
 @asyncio.coroutine
 def close_connection (websocket):

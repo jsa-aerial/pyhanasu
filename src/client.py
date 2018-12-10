@@ -110,8 +110,9 @@ def gorun (inchan_name, otchan_name):
     gc.loop.run_in_executor(None, gofn, inchan_name, otchan_name)
 
 
+@asyncio.coroutine
 def send (ws, enc, msg):
-    if enc == "binar":
+    if enc == "binary":
         encmsg = msgpack.packb(msg, default=default, use_bin_type=True)
     else:
         encmsg = json.dumps(msg)
@@ -128,7 +129,7 @@ def send_msg (ws, msg, encode="binary"):
                       msgsnt: msntcnt}})
     else:
         hmsg = {op: kwmsg, payload: msg}
-        send(ws, encode, hmsg)
+        loop2.run_until_complete(send(ws, encode, hmsg))
         update_db(cli_db, [ws, msgsnt], msntcnt+1)
         go(ch.send, {op: sent,
                      payload: {"ws": ws, kwmsg: hmsg,
@@ -171,34 +172,46 @@ def receive (ws, msg):
 
 ### Loop for running line reads/writes
 loop2 = asyncio.new_event_loop()
+line_loop = asyncio.new_event_loop()
+
+
+@asyncio.coroutine
+def read_line (ws):
+    try:
+        msg = yield from ws.recv()
+        msg = msgpack.unpackb(msg, ext_hook=ext_hook, raw=False)
+        update_db(cli_db, ['msg'], msg)
+    except websockets.exceptions.ConnectionClosed as e:
+        rmtclose(ws,e)
+        update_db(cli_db, ['msg'], done)
+    except Exception as e:
+        onerror(ws,e)
+        update_db(cli_db, ['msg'], done)
 
 def line_goloop (ws):
+    print("Line Goloop called ...")
     fin = False
     while (not fin):
         try:
-            msg = yield from ws.recv()
-            msg = msgpack.unpackb(msg, ext_hook=ext_hook, raw=False)
+            loop2.run_until_complete(read_line(ws))
+            msg = get_db(cli_db, ['msg'])
+            print("MSG: ", msg)
             if op in msg:
                 mop = msg[op]
             else:
                 mop = msg["op"]
-            if mop == "stop" or keyword("stop"):
+            if mop == "stop" or mop == keyword("stop"):
                 fin = True
             else:
                 receive(ws, msg)
-        except websockets.exceptions.ConnectionClosed as e:
-            rmtclose(ws,e)
-            fin = True
         except Exception as e:
             onerror(ws,e)
     print("Line GOLOOP exit")
 
 def line_gorun (ws):
-    loop2.run_in_executor(None, line_goloop, ws)
+    print("Line Gorun called ...")
+    gc.loop.run_in_executor(None, line_goloop, ws)
 
-def open (client_rec):
-    ws = client_rec["ws"]
-    return line_gorun(ws)
 
 def rmtclose (ws, e):
     ch = get_db(cli_db, [ws, "chan"])
@@ -218,11 +231,11 @@ def connect (url):
     client_chan =  gc.Chan(size=19)
     client_rec = {"url": url, "ws": ws, "chan": client_chan,
                   bpsize: 0, msgrcv: 0, msgsnt: 0}
-    open(client_rec)
     update_db(cli_db, [client_chan], client_rec)
     update_db(cli_db, [ws], client_rec)
     update_db(cli_db, [ws, "chan"], client_chan)
     gc.go(client_chan.send, {op: open, payload: ws})
+    ##line_gorun(ws)
     return client_chan
 
 def open_connection (url):

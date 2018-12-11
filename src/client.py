@@ -1,5 +1,6 @@
 import asyncio
 import websockets
+import array
 import msgpack
 import json
 import gochans as gc
@@ -22,14 +23,14 @@ class keyword:
 
 def default(obj):
     if type(obj) is keyword:
-        return msgpack.ExtType(3,bytes(obj.val,'UTF-8','strict'))
+        a = array.array('u', obj.val)
+        return msgpack.ExtType(3, a.tostring())
     raise TypeError("Non packable type: %r" % (obj,))
 
 def ext_hook(code, data):
-    ##print("CODE: ", code, "DATA: ", data)
+    print("CODE: ", code, "DATA: ", data)
     if code == 3:
         x = keyword(msgpack.unpackb(data, raw=False))
-        ##x = msgpack.unpackb(data, raw=False)
         return x
     return msgpack.ExtType(code, data)
 
@@ -112,6 +113,7 @@ def gorun (inchan_name, otchan_name):
 
 @asyncio.coroutine
 def send (ws, enc, msg):
+    print("MSG: ", msg)
     if enc == "binary":
         encmsg = msgpack.packb(msg, default=default, use_bin_type=True)
     else:
@@ -128,8 +130,8 @@ def send_msg (ws, msg, encode="binary"):
             payload: {"ws": ws, kwmsg: msg, "encode": encode,
                       msgsnt: msntcnt}})
     else:
-        hmsg = {op: kwmsg, payload: msg}
-        loop2.run_until_complete(send(ws, encode, hmsg))
+        hmsg = {'op': 'msg', 'payload': msg}
+        line_loop.run_until_complete(send(ws, encode, hmsg))
         update_db(cli_db, [ws, msgsnt], msntcnt+1)
         go(ch.send, {op: sent,
                      payload: {"ws": ws, kwmsg: hmsg,
@@ -205,6 +207,7 @@ def line_goloop (ws):
             else:
                 receive(ws, msg)
         except Exception as e:
+            fin = true
             onerror(ws,e)
     print("Line GOLOOP exit")
 
@@ -235,11 +238,14 @@ def connect (url):
     update_db(cli_db, [ws], client_rec)
     update_db(cli_db, [ws, "chan"], client_chan)
     gc.go(client_chan.send, {op: open, payload: ws})
-    ##line_gorun(ws)
     return client_chan
 
 def open_connection (url):
-    return loop2.run_until_complete(connect(url))
+    ch = loop2.run_until_complete(connect(url))
+    ws = get_db(cli_db, [ch, 'ws'])
+    line_gorun(ws)
+    return ch
+    
 
 @asyncio.coroutine
 def close_connection (websocket):

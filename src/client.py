@@ -23,12 +23,12 @@ class keyword:
 
 def default(obj):
     if type(obj) is keyword:
-        a = array.array('u', obj.val)
-        return msgpack.ExtType(3, a.tostring())
+        pks = msgpack.packb(obj.val, default=default, use_bin_type=True)
+        return msgpack.ExtType(3, pks)
     raise TypeError("Non packable type: %r" % (obj,))
 
 def ext_hook(code, data):
-    print("CODE: ", code, "DATA: ", data)
+    #print("CODE: ", code, "DATA: ", data, " TYPE: ", type(data))
     if code == 3:
         x = keyword(msgpack.unpackb(data, raw=False))
         return x
@@ -130,7 +130,7 @@ def send_msg (ws, msg, encode="binary"):
             payload: {"ws": ws, kwmsg: msg, "encode": encode,
                       msgsnt: msntcnt}})
     else:
-        hmsg = {'op': 'msg', 'payload': msg}
+        hmsg = {op: kwmsg, payload: msg}
         line_loop.run_until_complete(send(ws, encode, hmsg))
         update_db(cli_db, [ws, msgsnt], msntcnt+1)
         go(ch.send, {op: sent,
@@ -245,7 +245,7 @@ def open_connection (url):
     ws = get_db(cli_db, [ch, 'ws'])
     line_gorun(ws)
     return ch
-    
+
 
 @asyncio.coroutine
 def close_connection (websocket):

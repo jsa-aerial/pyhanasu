@@ -51,7 +51,7 @@ bpwait = keyword("bpwait")
 bpresume = keyword("bpresume")
 sent = keyword("sent")
 error = keyword("error")
-done = keyword("done")
+stop = keyword("stop")
 
 
 
@@ -80,40 +80,50 @@ def update_db (x, keys, val):
 
 
 
-#@asyncio.coroutine
-#def send_msg (ws, msg, encode='binary'):
-#    if
+def get_msg_op (msg):
+    if op in msg:
+        return msg[op]
+    elif 'op' in msg:
+        return msg['op']
+    else:
+        return 'no_op'
 
+def get_msg_payload (msg):
+    if payload in msg:
+        return msg[payload]
+    elif 'payload' in msg:
+        return msg['payload']
+    else:
+        return 'no_payload'
 
-def make_chans (icnm, isz, ocnm, osz):
-    update_db(cli_db, [icnm], gc.Chan(size=isz))
-    update_db(cli_db, [ocnm], gc.Chan(size=osz))
-
-def goloop (ic,oc):
+def goloop (ic, dispatchfn):
     fin = False
     while (not fin):
         f = gc.go(ic.recv)
-        res = f.result()
-        if res == done:
+        msg = f.result()
+        mop = get_msg_op(msg)
+        mpload = get_msg_payload(msg)
+        if mop == stop or mop == "stop":
             fin = True
+        elif mop == 'no_op':
+            print("WARNING Recv: bad msg envelope no 'op' field: ", msg)
+        elif mpload == 'no_payload':
+            print("WARNING Recv: bad msg envelope no 'payload' field: ", msg)
         else:
-            gc.go(oc.send, res)
+            dispatchfn(ic, mop, mpload)
     print("GOLOOP exit")
 
-def gofn(icnm, ocnm):
-    ic = get_db(cli_db, [icnm])
-    oc = get_db(cli_db, [ocnm])
-    goloop(ic=ic,oc=oc)
+def gofn(ic, dispatchfn):
+    goloop(ic=ic, dispatchfn=dispatchfn)
     print("gofn exit ...")
 
-def gorun (inchan_name, otchan_name):
-    make_chans(inchan_name, 19, otchan_name, 19)
-    gc.loop.run_in_executor(None, gofn, inchan_name, otchan_name)
+def gorun (chan, dispatchfn):
+    gc.loop.run_in_executor(None, gofn, chan, dispatchfn)
 
 
 @asyncio.coroutine
 def send (ws, enc, msg):
-    print("MSG: ", msg)
+    #print("MSG: ", msg)
     if enc == "binary":
         encmsg = msgpack.packb(msg, default=default, use_bin_type=True)
     else:
@@ -172,7 +182,7 @@ def receive (ws, msg):
 
 
 
-### Loop for running line reads/writes
+### Loops for running line reads/writes
 loop2 = asyncio.new_event_loop()
 line_loop = asyncio.new_event_loop()
 
@@ -185,10 +195,10 @@ def read_line (ws):
         update_db(cli_db, ['msg'], msg)
     except websockets.exceptions.ConnectionClosed as e:
         rmtclose(ws,e)
-        update_db(cli_db, ['msg'], done)
+        update_db(cli_db, ['msg'], stop)
     except Exception as e:
         onerror(ws,e)
-        update_db(cli_db, ['msg'], done)
+        update_db(cli_db, ['msg'], stop)
 
 def line_goloop (ws):
     print("Line Goloop called ...")
@@ -197,7 +207,7 @@ def line_goloop (ws):
         try:
             loop2.run_until_complete(read_line(ws))
             msg = get_db(cli_db, ['msg'])
-            print("MSG: ", msg)
+            #print("MSG: ", msg)
             if op in msg:
                 mop = msg[op]
             else:
@@ -248,35 +258,38 @@ def open_connection (url):
 
 
 @asyncio.coroutine
-def close_connection (websocket):
+def closeit (websocket):
     yield from websocket.close()
 
+def close_connection (ws):
+    line_loop.run_until_complete(closeit(ws))
 
-@asyncio.coroutine
-def hello(websocket):
 
+
+def echo_test(websocket):
+    ch = get_db(cli_db, [websocket, 'chan'])
     try:
         name = input("What's your name? ")
         msg = {'op': "msg", 'payload': name}
-
-        yield from websocket.send(json.dumps(msg))
         print("> {}".format(name))
 
-        greeting = yield from websocket.recv()
-        greeting = msgpack.unpackb(greeting, ext_hook=ext_hook, raw=False)
-        print("< {}".format(greeting))
+        send_msg(websocket, msg)
+        f = gc.go(ch.recv)
+        res = f.result()
+        echo = get_db(cli_db, ['msg', cli.payload, cli.op])
+        print("< {}".format(echo))
 
     finally:
         print("done one msg")
 
 
-## from client import rmv,cli_db,get_db,update_db,connect,close,hello,gorun
+## from client import rmv,cli_db,get_db,update_db,echo_test,gorun
 ##
 ## gorun()
 ## go(ic.send,"Hi")
 ## f = go(oc.recv)
 ## f.result() => "Hi"
-## go(ic.send,client.done)
+## go(ic.send,client.stop)
 ## GOLOOP exit
 ## gofn exit ...
 ##

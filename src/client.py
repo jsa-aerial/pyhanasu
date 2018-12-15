@@ -171,7 +171,8 @@ def receive (ws, msg):
             data = msg["payload"]
         if rcvd+1 >= get_db(cli_db, [ws, bpsize]):
             update_db(cli_db, [ws, msgrcv], 0)
-            send(ws, "binary", {op: reset, payload: {msgsnt: 0}})
+            line_loop.run_until_complete(
+                send(ws, "binary", {op: reset, payload: {msgsnt: 0}}))
         else:
             update_db(cli_db, [ws, msgrcv], get_db(cli_db, [ws, msgrcv])+1)
         go(get_db(cli_db, [ws, "chan"]).send,

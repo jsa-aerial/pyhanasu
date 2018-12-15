@@ -62,3 +62,6 @@ def dispatcher (ch, op, payload):
 def startit (url):
     ch = cli.open_connection(url)
     cli.gorun(ch, dispatcher)
+
+# for i in range(95): cli.send_msg(ws, {'op': "msg", 'payload': 'testing'})
+# [ex.get_udb([ws, 'sntcnt']), ex.get_udb([ws, 'rcvcnt'])]

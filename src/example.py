@@ -42,9 +42,9 @@ def dispatcher (ch, op, payload):
         print("CLIENT :error/payload = ", payload)
         update_udb([ws, 'errcnt'], get_udb([ws, 'errcnt'])+1)
     elif op == bpwait:
-        ws, msg, encode = dsdict(payload, 'ws', 'msg', 'encode')
+        ws, msg, encode = dsdict(payload, 'ws', cli.msg, 'encode')
         print("CLIENT, Waiting to send msg ", msg)
-        time.sleep(5) # NOTE this isn't like Clj, it will hang for 5 sec!
+        time.sleep(2) # NOTE this isn't like Clj, it will hang for 5 sec!
         print("CLIENT, Trying resend ...")
         cli.send_msg(ws, msg, encode=encode)
     elif op == bpresume:
@@ -63,5 +63,7 @@ def startit (url):
     ch = cli.open_connection(url)
     cli.gorun(ch, dispatcher)
 
+# ex.startit('ws://localhost:8765/ws')
+# ch,ws = ex.udb['com']
 # for i in range(95): cli.send_msg(ws, {'op': "msg", 'payload': 'testing'})
 # [ex.get_udb([ws, 'sntcnt']), ex.get_udb([ws, 'rcvcnt'])]

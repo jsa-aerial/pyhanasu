@@ -1,10 +1,10 @@
 import asyncio
 import websockets
-import array
 import msgpack
 import json
 import gochans as gc
 
+from contextlib import suppress
 from gochans import Chan,select,go,ChannelClosed
 
 
@@ -187,10 +187,12 @@ def receive (ws, msg):
 loop2 = asyncio.new_event_loop()
 line_loop = asyncio.new_event_loop()
 
-
 @asyncio.coroutine
 def read_line (ws):
     try:
+        #task = asyncio.create_task(ws.recv())
+        #update_db(cli_db, ['read_task'], task)
+        #msg = yield from task
         msg = yield from ws.recv()
         msg = msgpack.unpackb(msg, ext_hook=ext_hook, raw=False)
         update_db(cli_db, ['msg'], msg)
@@ -209,10 +211,7 @@ def line_goloop (ws):
             loop2.run_until_complete(read_line(ws))
             msg = get_db(cli_db, ['msg'])
             #print("MSG: ", msg)
-            if op in msg:
-                mop = msg[op]
-            else:
-                mop = msg["op"]
+            mop = get_msg_op(msg)
             if mop == "stop" or mop == keyword("stop"):
                 fin = True
             else:
@@ -262,8 +261,26 @@ def open_connection (url):
 def closeit (websocket):
     yield from websocket.close()
 
+def cancel_tasks (ws):
+    ch = get_db(cli_db, [ws, "chan"])
+    gc.go(ch.send, {op: stop, payload: {}})
+    pending = asyncio.Task.all_tasks()
+    for task in pending:
+        task.cancel()
+        #with suppress(asyncio.CancelledError):
+        #    loop2.run_until_complete(task)
+
+async def sleep (s): await asyncio.sleep(s)
+
 def close_connection (ws):
-    line_loop.run_until_complete(closeit(ws))
+    ch = get_db(cli_db, [ws, "chan"])
+    send_msg(ws, {op: 'done', payload: {}})
+    go(ch.send, {op: stop, payload: {}})
+    line_loop.run_until_complete(sleep(1))
+    loop2.run_until_complete(closeit(ws))
+    loop2.close()
+    line_loop.close()
+    gc.loop.close()
 
 
 

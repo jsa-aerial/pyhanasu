@@ -190,9 +190,6 @@ line_loop = asyncio.new_event_loop()
 @asyncio.coroutine
 def read_line (ws):
     try:
-        #task = asyncio.create_task(ws.recv())
-        #update_db(cli_db, ['read_task'], task)
-        #msg = yield from task
         msg = yield from ws.recv()
         msg = msgpack.unpackb(msg, ext_hook=ext_hook, raw=False)
         update_db(cli_db, ['msg'], msg)

@@ -214,7 +214,7 @@ def line_goloop (ws):
             else:
                 receive(ws, msg)
         except Exception as e:
-            fin = true
+            fin = True
             onerror(ws,e)
     print("Line GOLOOP exit")
 

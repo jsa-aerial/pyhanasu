@@ -1,4 +1,4 @@
-import asyncio
+import time
 import gochans as gc
 import client as cli
 from client import close, error, bpwait, bpresume, sent, stop, rmv
@@ -11,7 +11,6 @@ def get_udb (keys):
 def update_udb (keys, val):
     cli.update_db(udb, keys, val)
 
-sleep_loop = asyncio.new_event_loop()
 
 dsdict = lambda dict, *keys: list((dict[key] for key in keys))
 
@@ -45,7 +44,7 @@ def dispatcher (ch, op, payload):
     elif op == bpwait:
         ws, msg, encode = dsdict(payload, 'ws', cli.msg, 'encode')
         print("CLIENT, Waiting to send msg ", msg)
-        sleep_loop.run_until_complete(cli.sleep(5))
+        time.sleep(2)
         print("CLIENT, Trying resend ...")
         cli.send_msg(ws, msg, encode=encode)
     elif op == bpresume:
@@ -65,7 +64,9 @@ def startit (url):
     ch = cli.open_connection(url)
     cli.gorun(ch, dispatcher)
 
+# from client import get_db, cli_db, msgsnt, msgrcv
 # ex.startit('ws://localhost:8765/ws')
 # ch,ws = ex.udb['com']
 # for i in range(95): cli.send_msg(ws, {'op': "msg", 'payload': 'testing'})
 # [ex.get_udb([ws, 'sntcnt']), ex.get_udb([ws, 'rcvcnt'])]
+# [get_db(cli_db, [ws, msgsnt]), get_db(cli_db, [ws, msgrcv])]

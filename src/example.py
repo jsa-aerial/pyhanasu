@@ -1,4 +1,4 @@
-import time
+import asyncio
 import gochans as gc
 import client as cli
 from client import close, error, bpwait, bpresume, sent, stop, rmv
@@ -11,6 +11,7 @@ def get_udb (keys):
 def update_udb (keys, val):
     cli.update_db(udb, keys, val)
 
+sleep_loop = asyncio.new_event_loop()
 
 dsdict = lambda dict, *keys: list((dict[key] for key in keys))
 
@@ -44,7 +45,7 @@ def dispatcher (ch, op, payload):
     elif op == bpwait:
         ws, msg, encode = dsdict(payload, 'ws', cli.msg, 'encode')
         print("CLIENT, Waiting to send msg ", msg)
-        time.sleep(2) # NOTE this isn't like Clj, it will hang for 5 sec!
+        sleep_loop.run_until_complete(cli.sleep(5))
         print("CLIENT, Trying resend ...")
         cli.send_msg(ws, msg, encode=encode)
     elif op == bpresume:
@@ -53,6 +54,7 @@ def dispatcher (ch, op, payload):
         ws, cause = dsdict(payload, 'ws', 'cause')
         print("CLIENT, Stopping reads... Cause ", cause)
         cli.close_connection(ws)
+        sleep_loop.close()
         update_udb([ws], rmv)
     else:
         print("CLIENT :WTF/op = ", op, " payload = ", payload)

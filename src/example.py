@@ -1,5 +1,5 @@
+import trio
 import time
-import gochans as gc
 import client as cli
 from client import close, error, bpwait, bpresume, sent, stop, rmv
 
@@ -15,7 +15,7 @@ def update_udb (keys, val):
 dsdict = lambda dict, *keys: list((dict[key] for key in keys))
 
 def dispatcher (ch, op, payload):
-    print("DISPATCH:", op, payload)
+    #print("DISPATCH:", op, payload)
 
     if op == cli.msg or op == 'msg':
         ws, data = dsdict(payload, 'ws', 'data')
@@ -35,8 +35,6 @@ def dispatcher (ch, op, payload):
     elif op == close:
         ws, code, reason = dsdict(payload, 'ws', 'code', 'reason')
         print("CLIENT RMTclose/payload = ", payload)
-        go(ch.send, {cli.op: stop,
-                     cli.payload: {'ws': ws, 'cause': 'rmtclose'}})
     elif op == error:
         ws, err = dsdict(payload, 'ws', 'err')
         print("CLIENT :error/payload = ", payload)
@@ -44,29 +42,53 @@ def dispatcher (ch, op, payload):
     elif op == bpwait:
         ws, msg, encode = dsdict(payload, 'ws', cli.msg, 'encode')
         print("CLIENT, Waiting to send msg ", msg)
-        time.sleep(2)
-        print("CLIENT, Trying resend ...")
-        cli.send_msg(ws, msg, encode=encode)
+        v = udb["bpwait"] if "bpwait" in udb else []
+        v.append([ws, msg, encode])
+        update_udb(["bpwait"], v)
+        time.sleep(0.1)
     elif op == bpresume:
         print("CLIENT, BP Resume ", payload)
+        update_udb(["resume"], payload)
     elif op == stop:
         ws, cause = dsdict(payload, 'ws', 'cause')
         print("CLIENT, Stopping reads... Cause ", cause)
-        cli.close_connection(ws)
-        sleep_loop.close()
         update_udb([ws], rmv)
     else:
         print("CLIENT :WTF/op = ", op, " payload = ", payload)
 
 
-# 'ws://localhost:8765/ws'
-def startit (url):
-    ch = cli.open_connection(url)
-    cli.gorun(ch, dispatcher)
+async def bpretry ():
+    return "bpwait" in udb and udb["bpwait"]
 
-# from client import get_db, cli_db, msgsnt, msgrcv
-# ex.startit('ws://localhost:8765/ws')
-# ch,ws = ex.udb['com']
-# for i in range(95): cli.send_msg(ws, {'op': "msg", 'payload': 'testing'})
-# [ex.get_udb([ws, 'sntcnt']), ex.get_udb([ws, 'rcvcnt'])]
-# [get_db(cli_db, [ws, msgsnt]), get_db(cli_db, [ws, msgrcv])]
+async def resume ():
+    while "resume" not in udb:
+        await trio.sleep(0.1)
+    return True
+
+async def sendem (info):
+    ws = info["ws"]
+    cnt = info["appinfo"]["cnt"]
+    for i in range(cnt):
+        await cli.send_msg(
+            ws, {cli.op: "msg",
+                 cli.payload: "message number {}".format(i)})
+        retry = await bpretry()
+        if retry:
+            await resume()
+            retries = udb["bpwait"]
+            while retries:
+                # Yes, there are holes in this...
+                ws, msg, encode = retries.pop(0)
+                update_udb(["bpwait"], retries)
+                print("CLIENT, Trying resend:", msg)
+                await cli.send_msg(ws, msg, encode=encode)
+    await cli.send_msg(ws, {cli.op: "done", cli.payload: {}})
+
+
+
+# 'ws://localhost:8765/ws'
+def startit (url, cnt=3):
+    trio.run(cli.open_connection, url, dispatcher, sendem, {"cnt": cnt})
+
+## import example as ex
+## ex.startit('ws://localhost:8765/ws', 100)

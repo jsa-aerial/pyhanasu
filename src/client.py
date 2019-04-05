@@ -1,11 +1,12 @@
-import asyncio
-import websockets
+import trio
+import trio_websocket as tws
+from trio_websocket import open_websocket_url, connect_websocket_url
+
 import msgpack
 import json
-import gochans as gc
 
-from contextlib import suppress
-from gochans import Chan,select,go,ChannelClosed
+import channels
+from channels import chan, put, take
 
 
 class keyword:
@@ -53,8 +54,6 @@ sent = keyword("sent")
 error = keyword("error")
 stop = keyword("stop")
 
-
-
 rmv = keyword("rmv")
 cli_db = {}
 
@@ -96,64 +95,52 @@ def get_msg_payload (msg):
     else:
         return 'no_payload'
 
-def goloop (ic, dispatchfn):
-    fin = False
-    while (not fin):
-        f = gc.go(ic.recv)
-        msg = f.result()
+async def goloop (ch, dispatchfn):
+    while True:
+        msg = await take(ch)
         mop = get_msg_op(msg)
         mpload = get_msg_payload(msg)
         if mop == stop or mop == "stop":
-            fin = True
+            break
         elif mop == 'no_op':
             print("WARNING Recv: bad msg envelope no 'op' field: ", msg)
         elif mpload == 'no_payload':
             print("WARNING Recv: bad msg envelope no 'payload' field: ", msg)
         else:
-            dispatchfn(ic, mop, mpload)
+            dispatchfn(ch, mop, mpload)
     print("GOLOOP exit")
 
-def gofn(ic, dispatchfn):
-    goloop(ic=ic, dispatchfn=dispatchfn)
-    print("gofn exit ...")
-
-def gorun (chan, dispatchfn):
-    gc.loop.run_in_executor(None, gofn, chan, dispatchfn)
 
 
-@asyncio.coroutine
-def send (ws, enc, msg):
-    #print("MSG: ", msg)
+
+async def send (ws, enc, msg):
+    #print("SEND MSG: ", msg)
     if enc == "binary":
         encmsg = msgpack.packb(msg, default=default, use_bin_type=True)
     else:
         encmsg = json.dumps(msg)
-    yield from ws.send(encmsg)
+    await ws.send_message(encmsg)
 
-def send_msg (ws, msg, encode="binary"):
+async def send_msg(ws, msg, encode="binary"):
     kwmsg = keyword("msg")
     msntcnt = get_db(cli_db, [ws, msgsnt])
     ch = get_db(cli_db, [ws, "chan"])
     if msntcnt >= get_db(cli_db, [ws, bpsize]):
-        go(ch.send,
-           {op: bpwait,
-            payload: {"ws": ws, kwmsg: msg, "encode": encode,
-                      msgsnt: msntcnt}})
+        await put(ch, {op: bpwait,
+                       payload: {"ws": ws, kwmsg: msg, "encode": encode,
+                                 msgsnt: msntcnt}})
     else:
         hmsg = {op: kwmsg, payload: msg}
-        line_loop.run_until_complete(send(ws, encode, hmsg))
+        await send(ws, encode, hmsg)
         update_db(cli_db, [ws, msgsnt], msntcnt+1)
-        go(ch.send, {op: sent,
-                     payload: {"ws": ws, kwmsg: hmsg,
-                               msgsnt: get_db(cli_db, [ws, msgsnt])}})
+        await put(ch, {op: sent,
+                       payload: {"ws": ws, kwmsg: hmsg,
+                                 msgsnt: get_db(cli_db, [ws, msgsnt])}})
 
 
-def receive (ws, msg):
+async def receive (ws, msg):
     kwmsg = keyword("msg")
-    if op in msg:
-        mop = msg[op]
-    else:
-        mop = msg["op"]
+    mop = get_msg_op(msg)
     if mop == set:
         print("INIT MSG: ", msg)
         mbpsize = msg[payload][bpsize]
@@ -162,158 +149,113 @@ def receive (ws, msg):
         update_db(cli_db, [ws, bpsize], mbpsize)
     elif mop == reset:
         update_db(cli_db, [ws, msgsnt], msg[payload][msgsnt])
-        go(get_db(cli_db, [ws, "chan"]).send, {op: bpresume, payload: msg})
+        ch = get_db(cli_db, [ws, "chan"])
+        await put(ch, {op: bpresume, payload: msg})
     elif mop == "msg" or mop == kwmsg:
         rcvd = get_db(cli_db, [ws, msgrcv])
-        if payload in msg:
-            data = msg[payload]
-        else:
-            data = msg["payload"]
+        data = get_msg_payload(msg)
         if rcvd+1 >= get_db(cli_db, [ws, bpsize]):
             update_db(cli_db, [ws, msgrcv], 0)
-            line_loop.run_until_complete(
-                send(ws, "binary", {op: reset, payload: {msgsnt: 0}}))
+            await send(ws, "binary", {op: reset, payload: {msgsnt: 0}})
         else:
             update_db(cli_db, [ws, msgrcv], get_db(cli_db, [ws, msgrcv])+1)
-        go(get_db(cli_db, [ws, "chan"]).send,
-           {op: kwmsg, payload: {"ws": ws, "data": data}})
+        ch = get_db(cli_db, [ws, "chan"])
+        await put(ch, {op: kwmsg, payload: {"ws": ws, "data": data}})
     else:
         print("Client Receive Handler - unknown OP ", msg)
 
 
-
-
-### Loops for running line reads/writes
-loop2 = asyncio.new_event_loop()
-line_loop = asyncio.new_event_loop()
-
-@asyncio.coroutine
-def read_line (ws):
+async def read_line (ws):
     try:
-        msg = yield from ws.recv()
+        msg = await ws.get_message()
         msg = msgpack.unpackb(msg, ext_hook=ext_hook, raw=False)
         update_db(cli_db, ['msg'], msg)
-    except websockets.exceptions.ConnectionClosed as e:
-        rmtclose(ws,e)
+    except tws.ConnectionClosed as e:
+        await rmtclose(ws,e)
         update_db(cli_db, ['msg'], stop)
     except Exception as e:
-        onerror(ws,e)
+        await onerror(ws,e)
         update_db(cli_db, ['msg'], stop)
 
-def line_goloop (ws):
-    print("Line Goloop called ...")
-    fin = False
-    while (not fin):
+async def line_loop (ws):
+    print("Line loop called ...")
+    while True:
         try:
-            loop2.run_until_complete(read_line(ws))
+            await read_line(ws)
             msg = get_db(cli_db, ['msg'])
             #print("MSG: ", msg)
             mop = get_msg_op(msg)
             if mop == "stop" or mop == keyword("stop"):
-                fin = True
+                ch = get_db(cli_db, [ws, "chan"])
+                await put(ch, {op: stop, payload: {}})
+                await ws.aclose()
+                break
             else:
-                receive(ws, msg)
+                await receive(ws, msg)
         except Exception as e:
-            fin = True
-            onerror(ws,e)
-    print("Line GOLOOP exit")
-
-def line_gorun (ws):
-    print("Line Gorun called ...")
-    gc.loop.run_in_executor(None, line_goloop, ws)
+            await onerror(ws,e)
+            break
+    print("Line LOOP exit")
 
 
-def rmtclose (ws, e):
+async def rmtclose (ws, e):
     ch = get_db(cli_db, [ws, "chan"])
     print("Close: {0}".format(e))
-    go(ch.send, {op: close, payload: {"code": e.code, "reason": e.reason}})
+    await put(ch, {op: close, payload: {"code": e.code, "reason": e.reason}})
 
-def onerror (ws, e):
+async def onerror (ws, e):
     ch = get_db(cli_db, [ws, "chan"])
     print("Error: ", e)
-    go(ch.send, {op: error, payload: {"ws": ws, "err": e}})
+    await put(ch, {op: error, payload: {"ws": ws, "err": e}})
+
+
 
 
 # 'ws://localhost:8765/ws'
-@asyncio.coroutine
-def connect (url):
-    ws = yield from websockets.connect(url)
-    client_chan =  gc.Chan(size=19)
-    client_rec = {"url": url, "ws": ws, "chan": client_chan,
-                  bpsize: 0, msgrcv: 0, msgsnt: 0}
-    update_db(cli_db, [client_chan], client_rec)
-    update_db(cli_db, [ws], client_rec)
-    update_db(cli_db, [ws, "chan"], client_chan)
-    gc.go(client_chan.send, {op: open, payload: ws})
-    return client_chan
+async def connect (url, nursery):
+    ws = await connect_websocket_url(nursery, url, message_queue_size=10)
+    ch = chan(19)
+    chrec = {"url": url, "ws": ws, "chan": ch,
+             bpsize: 0, msgrcv: 0, msgsnt: 0}
+    update_db(cli_db, ["ws"], ws)
+    update_db(cli_db, [ch], chrec)
+    update_db(cli_db, [ws], chrec)
+    update_db(cli_db, [ws, "chan"], ch)
+    await put(ch, {op: open, payload: ws})
+    return chrec
 
-def open_connection (url):
-    ch = loop2.run_until_complete(connect(url))
-    ws = get_db(cli_db, [ch, 'ws'])
-    line_gorun(ws)
-    return ch
-
-
-@asyncio.coroutine
-def closeit (websocket):
-    yield from websocket.close()
-
-def cancel_tasks (ws):
-    ch = get_db(cli_db, [ws, "chan"])
-    gc.go(ch.send, {op: stop, payload: {}})
-    pending = asyncio.Task.all_tasks()
-    for task in pending:
-        task.cancel()
-        #with suppress(asyncio.CancelledError):
-        #    loop2.run_until_complete(task)
-
-async def sleep (s): await asyncio.sleep(s)
-
-def close_connection (ws):
-    ch = get_db(cli_db, [ws, "chan"])
-    send_msg(ws, {op: 'done', payload: {}})
-    go(ch.send, {op: stop, payload: {}})
-    line_loop.run_until_complete(sleep(1))
-    loop2.run_until_complete(closeit(ws))
-    loop2.close()
-    line_loop.close()
-    gc.loop.close()
+async def open_connection (url, dispatchfn, apptask=None, appinfo={}):
+    async with trio.open_nursery() as nursery:
+        chrec = await connect(url, nursery)
+        ch = chrec["chan"]
+        ws = get_db(cli_db, [ch, 'ws'])
+        nursery.start_soon(line_loop, ws)
+        nursery.start_soon(goloop, ch, dispatchfn)
+        await trio.sleep(0.1)
+        if apptask != None:
+            info = {"nursery": nursery, "chrec": chrec,
+                    "ws": ws, "db": cli_db,
+                    "appinfo": appinfo}
+            nursery.start_soon(apptask, info)
 
 
-
-def echo_test(websocket):
-    ch = get_db(cli_db, [websocket, 'chan'])
+async def main():
     try:
-        name = input("What's your name? ")
-        msg = {'op': "msg", 'payload': name}
-        print("> {}".format(name))
+        async with open_websocket_url('ws://localhost:8765/ws') as ws:
+            msg = await ws.get_message()
+            msg = msgpack.unpackb(msg, ext_hook=ext_hook, raw=False)
+            print('Received message: %s', msg)
+            await send_msg(ws, {"op": "msg",
+                                "payload": {op: "msg", "data": 'hello world!'}})
+            msg = await ws.get_message()
+            msg = msgpack.unpackb(msg, ext_hook=ext_hook, raw=False)
+            print('Received message: %s', msg)
+    except OSError as ose:
+        print('Connection attempt failed: %s', ose)
 
-        send_msg(websocket, msg)
-        f = gc.go(ch.recv)
-        res = f.result()
-        echo = get_db(cli_db, ['msg', cli.payload, cli.op])
-        print("< {}".format(echo))
 
-    finally:
-        print("done one msg")
+#trio.run(main)
 
 
-## from client import rmv,cli_db,get_db,update_db,echo_test,gorun
-##
-## gorun()
-## go(ic.send,"Hi")
-## f = go(oc.recv)
-## f.result() => "Hi"
-## go(ic.send,client.stop)
-## GOLOOP exit
-## gofn exit ...
-##
-## loop2 = asyncio.new_event_loop()
-## asyncio.set_event_loop(loop2)
-## ws = loop2.run_until_complete(connect('ws://localhost:8765/ws'))
-## loop2.run_until_complete(hello(ws))
-## loop2.run_until_complete(close(ws))
-
-## s = 'key2.key21.key211'
-## print get_db(cli_db,s.split('.'))
-
+#        await send_msg(ws, {"op": "msg",
+#                            "payload": {op: "msg", "data": 'hello world!'}})
